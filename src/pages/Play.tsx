@@ -1,10 +1,10 @@
-// src/Pages/Play.tsx
+// src/pages/Play.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { WS_URL } from "../config"; // config.ts: WS_URL = "wss://suiloop.onrender.com/ws" (veya env)
+import { WS_URL } from "../config";
 
 type LeaderboardPlayer = { id: string; name: string; score: number };
 
@@ -25,21 +25,21 @@ export default function Play() {
     text: string;
     options: string[];
     points: number;
-    endsAt: number; // ms epoch
+    endsAt: number;
   }>(null);
 
   const [picked, setPicked] = useState<number | null>(null);
 
   const [results, setResults] = useState<null | {
-    index: number; // -1 => final
+    index: number;
     correctIndex: number;
     leaderboard: LeaderboardPlayer[];
-    nextAt?: number; // ms epoch (sonraki soruya otomatik geçiş)
+    nextAt?: number;
   }>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Oda kodu yoksa WS açma
+  // Oda kodu yoksa kibar uyarı
   if (!ROOM) {
     return (
       <div className="min-h-screen bg-gradient-background p-6">
@@ -65,9 +65,10 @@ export default function Play() {
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
-    console.log("WS connect →", WS_URL, "room:", ROOM);
+    console.log("[PLAY] WS connect →", WS_URL, "room:", ROOM);
 
     ws.addEventListener("open", () => {
+      console.log("[PLAY] WS open");
       ws.send(JSON.stringify({ type: "subscribe", room: ROOM }));
       if (initialName) {
         ws.send(JSON.stringify({ type: "join", room: ROOM, name: initialName }));
@@ -77,12 +78,6 @@ export default function Play() {
     ws.addEventListener("message", (ev: MessageEvent) => {
       try {
         const msg = JSON.parse(ev.data as string);
-
-        // Beklediğimiz mesaj tipleri:
-        // {type:"state", room, started:boolean}
-        // {type:"question", room, index, text, options, points, endsAt}
-        // {type:"results", room, index, correctIndex, leaderboard, nextAt?}
-        // {type:"final", room, leaderboard}
         if (!msg || msg.room !== ROOM) return;
 
         if (msg.type === "state") {
@@ -122,25 +117,27 @@ export default function Play() {
           return;
         }
       } catch (e) {
-        console.warn("WS parse error (play):", e);
+        console.warn("[PLAY] WS parse error:", e);
       }
     });
 
     ws.addEventListener("error", (e) => {
-      console.error("WS error (play)", e);
-      alert("WS error (play). Check DevTools Console.");
+      console.error("[PLAY] WS error", e);
     });
+
     ws.addEventListener("close", (e: CloseEvent) => {
-      console.warn("WS close (play)", e.code, e.reason);
+      console.warn("[PLAY] WS close", e.code, e.reason);
     });
 
     return () => {
-      try { ws.close(); } catch {}
+      try {
+        ws.close();
+      } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ROOM, initialName]);
 
-  // URL'de ?name=… senkronu
+  // URL'de ?name= senkron
   useEffect(() => {
     if (name && sp.get("name") !== name) {
       const next = new URLSearchParams(sp);
@@ -171,12 +168,12 @@ export default function Play() {
 
   function pick(i: number) {
     if (!currentQ) return;
-    if (picked !== null) return; // tek cevap
+    if (picked !== null) return;
     setPicked(i);
     wsRef.current?.send(JSON.stringify({ type: "answer", room: ROOM, index: currentQ.index, choice: i }));
   }
 
-  // basit geri sayım (soru/sonraki geçiş)
+  // geri sayım
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 200);
@@ -262,7 +259,6 @@ export default function Play() {
                         </div>
                       ))}
                     </div>
-
                     {results.index < 0 && (
                       <div className="flex gap-2 pt-2">
                         <Button onClick={() => navigate("/")}>Home</Button>
