@@ -1,3 +1,4 @@
+// src/pages/Room.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import QRCode from "react-qr-code";
@@ -5,9 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { WS_URL, BASE_URL } from "../config";
 
-// Dapp Kit + eski builder API: TransactionBlock
-import { ConnectButton, useCurrentAccount, useSignAndExecuteTransactionBlock } from "@mysten/dapp-kit";
-import { TransactionBlock } from "@mysten/sui.js/transactions";
+// Dapp Kit
+import {
+  ConnectButton,
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+} from "@mysten/dapp-kit";
+// Eski builder API: Transaction
+import { Transaction } from "@mysten/sui/transactions";
 
 type Player = { id: string; name: string; score?: number; address?: string | null };
 
@@ -40,7 +46,7 @@ export default function Room() {
 
   // Wallet (host)
   const host = useCurrentAccount();
-  const { mutateAsync: signAndExecuteTB } = useSignAndExecuteTransactionBlock();
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
 
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
@@ -121,24 +127,24 @@ export default function Room() {
   const remainSecQ = currentQ ? Math.max(0, Math.ceil((currentQ.endsAt - now) / 1000)) : 0;
   const remainSecNext = results?.nextAt ? Math.max(0, Math.ceil((results.nextAt - now) / 1000)) : 0;
 
-  // Testnet ödül (örnek): ilk 3 kişiye küçük SUI
+  // Testnet prize örneği (host cüzdanından küçük SUI transferi)
   async function payPrizesTop3(leaderboard: Player[]) {
     if (!host?.address) return alert("Host wallet not connected!");
     const winners = leaderboard.filter(w => !!w.address).slice(0, 3).map(w => w.address!);
     if (winners.length === 0) return alert("No winners with wallet address.");
 
-    // 0.05 / 0.03 / 0.02 SUI (Mist = 1e9)
+    // miktarlar Mist cinsinden (1 SUI = 1e9 Mist)
     const amounts = [50_000_000, 30_000_000, 20_000_000].slice(0, winners.length);
 
-    const txb = new TransactionBlock();
-    // tek split ile birden fazla coin üret
-    const coins = txb.splitCoins(txb.gas, amounts.map((a) => txb.pure(a)));
-    coins.forEach((coin, i) => {
-      txb.transferObjects([coin], txb.pure(winners[i]));
+    const tx = new Transaction();
+    // splitCoins: gas'tan parçala
+    const splits = tx.splitCoins(tx.gas, amounts.map(a => tx.pure.u64(a)));
+    splits.forEach((coin, i) => {
+      tx.transferObjects([coin], tx.pure.address(winners[i]));
     });
 
     try {
-      await signAndExecuteTB({ transactionBlock: txb });
+      await signAndExecute({ transaction: tx });
       alert("Prizes sent on testnet!");
     } catch (e) {
       console.error(e);
