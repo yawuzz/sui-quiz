@@ -1,4 +1,3 @@
-// src/pages/Play.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +9,7 @@ type LeaderboardPlayer = { id: string; name: string; score: number };
 
 export default function Play() {
   const { roomCode = "" } = useParams();
-  const ROOM = (roomCode || "").trim().toUpperCase();
+  const ROOM = (roomCode || "").trim().toUpperCase(); // <— KRİTİK
 
   const [sp, setSp] = useSearchParams();
   const navigate = useNavigate();
@@ -39,22 +38,17 @@ export default function Play() {
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Oda kodu yoksa kibar uyarı
   if (!ROOM) {
     return (
       <div className="min-h-screen bg-gradient-background p-6">
         <div className="max-w-xl mx-auto">
           <Card className="bg-gradient-card border-border/50">
-            <CardHeader>
-              <CardTitle className="text-center">Join Quiz</CardTitle>
-            </CardHeader>
+            <CardHeader><CardTitle className="text-center">Join Quiz</CardTitle></CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground">
                 Missing room code. Use a link like <code>/play/ABC123</code>.
               </p>
-              <div className="pt-3">
-                <Button onClick={() => navigate("/")}>Home</Button>
-              </div>
+              <div className="pt-3"><Button onClick={() => navigate("/")}>Home</Button></div>
             </CardContent>
           </Card>
         </div>
@@ -68,7 +62,7 @@ export default function Play() {
     console.log("[PLAY] WS connect →", WS_URL, "room:", ROOM);
 
     ws.addEventListener("open", () => {
-      console.log("[PLAY] WS open");
+      console.log("[PLAY] WS open → subscribe", ROOM);
       ws.send(JSON.stringify({ type: "subscribe", room: ROOM }));
       if (initialName) {
         ws.send(JSON.stringify({ type: "join", room: ROOM, name: initialName }));
@@ -107,11 +101,7 @@ export default function Play() {
           return;
         }
         if (msg.type === "final") {
-          setResults({
-            index: -1,
-            correctIndex: -1,
-            leaderboard: msg.leaderboard || [],
-          });
+          setResults({ index: -1, correctIndex: -1, leaderboard: msg.leaderboard || [] });
           setCurrentQ(null);
           setStarted(false);
           return;
@@ -123,21 +113,16 @@ export default function Play() {
 
     ws.addEventListener("error", (e) => {
       console.error("[PLAY] WS error", e);
+      alert("WS error (play). Check DevTools Console.");
     });
-
     ws.addEventListener("close", (e: CloseEvent) => {
       console.warn("[PLAY] WS close", e.code, e.reason);
     });
 
-    return () => {
-      try {
-        ws.close();
-      } catch {}
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { try { ws.close(); } catch {} };
   }, [ROOM, initialName]);
 
-  // URL'de ?name= senkron
+  // ?name senkronu
   useEffect(() => {
     if (name && sp.get("name") !== name) {
       const next = new URLSearchParams(sp);
@@ -155,9 +140,7 @@ export default function Play() {
   }
 
   function leave() {
-    try {
-      wsRef.current?.send(JSON.stringify({ type: "leave", room: ROOM }));
-    } catch {}
+    try { wsRef.current?.send(JSON.stringify({ type: "leave", room: ROOM })); } catch {}
     setJoined(false);
     setName("");
     const next = new URLSearchParams(sp);
@@ -173,22 +156,19 @@ export default function Play() {
     wsRef.current?.send(JSON.stringify({ type: "answer", room: ROOM, index: currentQ.index, choice: i }));
   }
 
-  // geri sayım
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 200);
     return () => clearInterval(t);
   }, []);
-  const remainSecQ = currentQ ? Math.max(0, Math.ceil((currentQ.endsAt - now) / 1000)) : 0;
+  const remainSecQ    = currentQ ? Math.max(0, Math.ceil((currentQ.endsAt - now) / 1000)) : 0;
   const remainSecNext = results?.nextAt ? Math.max(0, Math.ceil((results.nextAt - now) / 1000)) : 0;
 
   return (
     <div className="min-h-screen bg-gradient-background p-4">
       <div className="max-w-xl mx-auto">
         <Card className="bg-gradient-card border-border/50">
-          <CardHeader>
-            <CardTitle className="text-center">Join Quiz — Room {ROOM}</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="text-center">Join Quiz — Room {ROOM}</CardTitle></CardHeader>
           <CardContent className="space-y-4">
             {!joined ? (
               <>
@@ -213,9 +193,7 @@ export default function Play() {
 
                 {currentQ && (
                   <div className="space-y-3">
-                    <div className="text-sm text-muted-foreground">
-                      Time left: {remainSecQ}s • {currentQ.points} pts
-                    </div>
+                    <div className="text-sm text-muted-foreground">Time left: {remainSecQ}s • {currentQ.points} pts</div>
                     <div className="font-medium">{currentQ.text}</div>
                     <div className="grid grid-cols-1 gap-2">
                       {currentQ.options.map((o, i) => (
@@ -231,9 +209,7 @@ export default function Play() {
                         </button>
                       ))}
                     </div>
-                    {picked !== null && (
-                      <div className="text-xs text-muted-foreground">Answer locked.</div>
-                    )}
+                    {picked !== null && <div className="text-xs text-muted-foreground">Answer locked.</div>}
                   </div>
                 )}
 
@@ -244,16 +220,11 @@ export default function Play() {
                       {results.index >= 0 && results.nextAt ? ` • Next in ${remainSecNext}s` : ""}
                     </div>
                     {results.index >= 0 && (
-                      <div className="text-xs text-muted-foreground">
-                        Correct: option #{results.correctIndex + 1}
-                      </div>
+                      <div className="text-xs text-muted-foreground">Correct: option #{results.correctIndex + 1}</div>
                     )}
                     <div className="space-y-2">
                       {results.leaderboard.map((p, idx) => (
-                        <div
-                          key={p.id}
-                          className="flex items-center justify-between p-2 rounded border border-border bg-background/40"
-                        >
+                        <div key={p.id} className="flex items-center justify-between p-2 rounded border border-border bg-background/40">
                           <span>{idx + 1}. {p.name}</span>
                           <span className="text-xs">{p.score} pts</span>
                         </div>
