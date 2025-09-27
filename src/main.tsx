@@ -1,29 +1,25 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { RouterProvider } from "react-router-dom";
+import { router } from "./router"; // sende nasıl ise: "./main-router" vs olabilir
 import "./index.css";
-import HostDashboard from "@/pages/HostDashboard";
-import Room from "@/pages/Room";
-import Play from "@/pages/Play";
 
-function ErrorFallback() {
-  return (
-    <div style={{ padding: 24 }}>
-      <h2>Something went wrong</h2>
-      <p>Route not found or component crashed.</p>
-      <a href="/">Go Home</a>
-    </div>
-  );
-}
+import { SuiClientProvider, createNetworkConfig } from "@mysten/dapp-kit";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import "@mysten/dapp-kit/dist/index.css"; // dapp-kit default stiller
 
-const router = createBrowserRouter([
-  { path: "/", element: <HostDashboard />, errorElement: <ErrorFallback /> },
-  { path: "/room/:roomCode", element: <Room />, errorElement: <ErrorFallback /> },
-  { path: "/play/:roomCode", element: <Play />, errorElement: <ErrorFallback /> },
-]);
+const { networkConfig } = createNetworkConfig({
+  testnet: { url: "https://fullnode.testnet.sui.io" },
+});
+
+const queryClient = new QueryClient();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <QueryClientProvider client={queryClient}>
+      <SuiClientProvider networks={networkConfig} defaultNetwork="testnet">
+        <RouterProvider router={router} />
+      </SuiClientProvider>
+    </QueryClientProvider>
   </React.StrictMode>
 );

@@ -1,10 +1,11 @@
-// src/pages/Play.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { WS_URL } from "../config";
+
+import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 
 type LeaderboardPlayer = { id: string; name: string; score: number };
 
@@ -15,10 +16,11 @@ export default function Play() {
   const [sp, setSp] = useSearchParams();
   const navigate = useNavigate();
 
-  // İlk yüklemede URL'deki ?name değerini oku (sadece 1 kez)
-  const urlName = useMemo(() => sp.get("name") || "", []); // <— DİKKAT: deps yok
-  const [name, setName] = useState(urlName);
-  const [joined, setJoined] = useState(!!urlName);
+  const account = useCurrentAccount();
+
+  const initialName = useMemo(() => sp.get("name") || "", [sp]);
+  const [name, setName] = useState(initialName);
+  const [joined, setJoined] = useState(!!initialName);
   const [started, setStarted] = useState(false);
 
   const [currentQ, setCurrentQ] = useState<null | {
@@ -40,15 +42,12 @@ export default function Play() {
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Oda kodu yoksa WS açma
   if (!ROOM) {
     return (
       <div className="min-h-screen bg-gradient-background p-6">
         <div className="max-w-xl mx-auto">
           <Card className="bg-gradient-card border-border/50">
-            <CardHeader>
-              <CardTitle className="text-center">Join Quiz</CardTitle>
-            </CardHeader>
+            <CardHeader><CardTitle className="text-center">Join Quiz</CardTitle></CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground">
                 Missing room code. Use a link like <code>/play/ABC123</code>.
@@ -63,7 +62,6 @@ export default function Play() {
     );
   }
 
-  // 🔌 WS sadece ROOM değişince açılır (keystroke ile açılmaz!)
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
@@ -72,7 +70,9 @@ export default function Play() {
     ws.addEventListener("open", () => {
       console.log("[PLAY] WS open → subscribe", ROOM);
       ws.send(JSON.stringify({ type: "subscribe", room: ROOM }));
-      // Burada "join" GÖNDERMİYORUZ. Join, aşağıdaki ayrı effect ile (butona basınca) gidecek.
+      if (initialName) {
+        ws.send(JSON.stringify({ type: "join", room: ROOM, name: initialName, address: account?.address || null }));
+      }
     });
 
     ws.addEventListener("message", (ev: MessageEvent) => {
@@ -123,7 +123,6 @@ export default function Play() {
 
     ws.addEventListener("error", (e) => {
       console.error("[PLAY] WS error", e);
-      // alert("WS error (play). Check DevTools Console."); // Spam olmasın diye kapattım
     });
 
     ws.addEventListener("close", (e: CloseEvent) => {
@@ -133,31 +132,29 @@ export default function Play() {
     return () => {
       try { ws.close(); } catch {}
     };
-  }, [ROOM]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ROOM, initialName, account?.address]);
 
-  // ✅ Join mesajını sadece "joined === true && name" olduğunda ve WS açıkken gönder
+  // URL'de ?name= senkronu
   useEffect(() => {
-    if (!joined || !name) return;
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "join", room: ROOM, name }));
+    if (name && sp.get("name") !== name) {
+      const next = new URLSearchParams(sp);
+      next.set("name", name);
+      setSp(next, { replace: true });
     }
-  }, [joined, name, ROOM]);
+  }, [name, sp, setSp]);
 
-  // (ÖNEMLİ) Her harfte URL'e yazmayacağız. Sadece Join/Leave anında güncelle.
   function doJoin() {
     const trimmed = name.trim();
     if (!trimmed) return;
     setName(trimmed);
     setJoined(true);
-
-    const next = new URLSearchParams(sp);
-    next.set("name", trimmed);
-    setSp(next, { replace: true });
-
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "join", room: ROOM, name: trimmed }));
-    }
+    wsRef.current?.send(JSON.stringify({
+      type: "join",
+      room: ROOM,
+      name: trimmed,
+      address: account?.address || null,
+    }));
   }
 
   function leave() {
@@ -194,6 +191,15 @@ export default function Play() {
             <CardTitle className="text-center">Join Quiz — Room {ROOM}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="text-xs text-muted-foreground">
+                {account?.address
+                  ? `Connected: ${account.address.slice(0,6)}...${account.address.slice(-4)}`
+                  : "Wallet not connected"}
+              </div>
+              <ConnectButton />
+            </div>
+
             {!joined ? (
               <>
                 <label className="text-sm font-medium text-foreground block">Your Name</label>
@@ -254,6 +260,7 @@ export default function Play() {
                         </div>
                       ))}
                     </div>
+
                     {results.index < 0 && (
                       <div className="flex gap-2 pt-2">
                         <Button onClick={() => navigate("/")}>Home</Button>
