@@ -1,13 +1,47 @@
 // ws-server.cjs
-// Node 22 + ws
+// Node 22, HTTP + WebSocket (ws) tek sunucu, /ws yolunda upgrade
+
+const http = require("http");
 const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 3001;
-const wss = new WebSocketServer({ port: PORT });
 
-console.log(`WS server on ws://localhost:${PORT}`);
+// ====== HTTP SERVER (health + root) ======
+const server = http.createServer((req, res) => {
+  if (req.url === "/healthz") {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("ok");
+    return;
+  }
+  if (req.url === "/" || req.url === "/index.html") {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("sui-quiz ws server up");
+    return;
+  }
+  res.writeHead(404, { "content-type": "text/plain" });
+  res.end("not found");
+});
 
-// === Helpers ===
+// ====== WS SERVER (/ws) ======
+const wss = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", (req, socket, head) => {
+  // Sadece /ws için upgrade kabul et
+  const { url } = req;
+  if (!url || !url.startsWith("/ws")) {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit("connection", ws, req);
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(`HTTP on http://0.0.0.0:${PORT}  |  WS on ws://0.0.0.0:${PORT}/ws`);
+});
+
+// ====== Yardımcılar ======
 function norm(code) {
   return String(code || "").trim().toUpperCase();
 }
@@ -16,9 +50,7 @@ function uid() {
 }
 function send(ws, obj) {
   if (ws.readyState === ws.OPEN) {
-    try {
-      ws.send(JSON.stringify(obj));
-    } catch {}
+    try { ws.send(JSON.stringify(obj)); } catch {}
   }
 }
 function broadcast(room, obj) {
@@ -30,24 +62,8 @@ function broadcast(room, obj) {
   }
 }
 
-// === Room state ===
-/*
-rooms = {
-  ABC123: {
-    started: false,
-    players: Map<playerId, { id, name, score }>
-    questions: Question[],
-    currentIndex: number,
-    current: {
-      endsAt: number,
-      answers: Map<playerId, { choice, timeMs }>
-      timer: NodeJS.Timeout | null
-    }
-  }
-}
-Question = { id, text, options[], correctIndex, points, durationSec }
-*/
-const rooms = new Map();
+// ====== Oda durumu ======
+const rooms = new Map(); // Map<ROOM, {started, players:Map, questions, currentIndex, current}>
 
 function ensureRoom(room) {
   const R = norm(room);
@@ -62,11 +78,9 @@ function ensureRoom(room) {
   }
   return rooms.get(R);
 }
-
 function getRoom(room) {
   return rooms.get(norm(room));
 }
-
 function sendState(room) {
   const R = norm(room);
   const data = rooms.get(R);
@@ -80,26 +94,22 @@ function scheduleResults(room) {
   const data = getRoom(R);
   if (!data || !data.current) return;
 
-  // Sonuçları hesapla
   const q = data.questions[data.currentIndex];
   const correct = q.correctIndex;
 
-  // Skorlandırma: yanlış = 0; doğru = q.points
-  // (Daha sonra süre bonusu eklenebilir)
   for (const [pid, ans] of data.current.answers.entries()) {
     const player = data.players.get(pid);
     if (!player) continue;
     if (ans.choice === correct) {
-      player.score = (player.score || 0) + q.points;
+      player.score = (player.score || 0) + q.points; // yanlış = 0
     }
   }
 
-  // Liderlik tablosu
   const leaderboard = Array.from(data.players.values())
     .map((p) => ({ id: p.id, name: p.name, score: p.score || 0 }))
     .sort((a, b) => b.score - a.score);
 
-  const nextAt = Date.now() + 5000; // 5 saniye sonra bir sonraki soru
+  const nextAt = Date.now() + 5000; // 5sn sonra sıradaki soru
 
   broadcast(R, {
     type: "results",
@@ -110,7 +120,6 @@ function scheduleResults(room) {
     nextAt,
   });
 
-  // 5sn sonra sıradaki soruya geç
   if (data.current.timer) clearTimeout(data.current.timer);
   data.current.timer = setTimeout(() => {
     data.current = null;
@@ -124,7 +133,6 @@ function allAnswered(room) {
   if (!data || !data.current) return false;
   const total = data.players.size;
   const answered = data.current.answers.size;
-  // En az 1 oyuncu varsa ve tümü yanıtladıysa true
   return total > 0 && answered >= total;
 }
 
@@ -133,14 +141,11 @@ function nextQuestion(room) {
   const data = getRoom(R);
   if (!data) return;
 
-  // Sıradaki index
   const nextIndex = (data.currentIndex ?? -1) + 1;
   if (!data.questions || nextIndex >= data.questions.length) {
-    // Final
     const leaderboard = Array.from(data.players.values())
       .map((p) => ({ id: p.id, name: p.name, score: p.score || 0 }))
       .sort((a, b) => b.score - a.score);
-
     broadcast(R, { type: "final", room: R, leaderboard });
     data.started = false;
     data.currentIndex = -1;
@@ -152,11 +157,7 @@ function nextQuestion(room) {
   const q = data.questions[nextIndex];
   const endsAt = Date.now() + (q.durationSec * 1000 || 20000);
 
-  data.current = {
-    endsAt,
-    answers: new Map(),
-    timer: null,
-  };
+  data.current = { endsAt, answers: new Map(), timer: null };
 
   broadcast(R, {
     type: "question",
@@ -168,10 +169,7 @@ function nextQuestion(room) {
     endsAt,
   });
 
-  // Süre sonunda otomatik sonuç
-  data.current.timer = setTimeout(() => {
-    scheduleResults(R);
-  }, Math.max(0, endsAt - Date.now()));
+  data.current.timer = setTimeout(() => scheduleResults(R), Math.max(0, endsAt - Date.now()));
 }
 
 function endGame(room) {
@@ -186,28 +184,23 @@ function endGame(room) {
   const leaderboard = Array.from(data.players.values())
     .map((p) => ({ id: p.id, name: p.name, score: p.score || 0 }))
     .sort((a, b) => b.score - a.score);
+
   broadcast(R, { type: "final", room: R, leaderboard });
 }
 
-// === WS events ===
+// ====== WS Connection ======
 wss.on("connection", (ws, req) => {
   ws.id = uid();
   ws.room = null;
   ws.playerId = null;
-
-  // Basit ping/pong keepalive
   ws.isAlive = true;
   ws.on("pong", () => (ws.isAlive = true));
 
-  console.log("[WS] connection", { id: ws.id, ip: req.socket.remoteAddress });
+  console.log("[WS] connection", { id: ws.id, ip: req.socket?.remoteAddress });
 
   ws.on("message", (buf) => {
     let msg;
-    try {
-      msg = JSON.parse(buf.toString());
-    } catch {
-      return;
-    }
+    try { msg = JSON.parse(buf.toString()); } catch { return; }
     const t = msg?.type;
 
     if (t === "subscribe") {
@@ -228,7 +221,6 @@ wss.on("connection", (ws, req) => {
       if (!ws.playerId) ws.playerId = uid();
 
       const data = getRoom(R);
-      // Aynı isimle birden fazla girişe izin veriyoruz; id bazlı tutuyoruz
       data.players.set(ws.playerId, { id: ws.playerId, name, score: data.players.get(ws.playerId)?.score || 0 });
       console.log("[WS] join", { room: R, name, playerId: ws.playerId });
       sendState(R);
@@ -238,9 +230,7 @@ wss.on("connection", (ws, req) => {
     if (t === "leave") {
       const R = norm(msg.room ?? ws.room);
       const data = getRoom(R);
-      if (data && ws.playerId) {
-        data.players.delete(ws.playerId);
-      }
+      if (data && ws.playerId) data.players.delete(ws.playerId);
       console.log("[WS] leave", { room: R, playerId: ws.playerId });
       sendState(R);
       return;
@@ -272,10 +262,7 @@ wss.on("connection", (ws, req) => {
       }
       data.started = true;
       data.currentIndex = -1;
-      // Sıfırla skorlar (istenirse)
-      for (const p of data.players.values()) {
-        p.score = 0;
-      }
+      for (const p of data.players.values()) p.score = 0;
       console.log("[WS] start", { room: R, players: data.players.size });
       sendState(R);
       nextQuestion(R);
@@ -295,9 +282,7 @@ wss.on("connection", (ws, req) => {
 
       if (!data.current.answers.has(ws.playerId)) {
         data.current.answers.set(ws.playerId, { choice, timeMs: Date.now() });
-        // Herkes yanıtladıysa anında sonuç
         if (allAnswered(R)) {
-          // Süre timer'ı varsa iptal et
           if (data.current.timer) clearTimeout(data.current.timer);
           scheduleResults(R);
         }
@@ -324,7 +309,7 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-// Keepalive (Render free instance’larda uzun süreli bağlantılara yardımcı olur)
+// Keepalive
 const pingInterval = setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.isAlive === false) {
