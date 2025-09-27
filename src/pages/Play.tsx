@@ -3,7 +3,8 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { WS_URL } from "@/config";
+import { WS_URL, BASE_URL } from "../config"; // yol senin yapıya göre ../config veya ../../config
+
 
 export default function Play() {
   const { roomCode = "" } = useParams();

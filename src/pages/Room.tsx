@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import QRCode from "react-qr-code";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { WS_URL, BASE_URL } from "@/config";
+import { WS_URL, BASE_URL } from "../config"; // yol senin yapıya göre ../config veya ../../config
 
 type Player = { id: string; name: string; score?: number };
 
