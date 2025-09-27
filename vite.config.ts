@@ -11,16 +11,10 @@ export default defineConfig({
     })
   ],
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "src")
-    }
+    alias: { "@": path.resolve(__dirname, "src") }
   },
   define: {
     global: "globalThis"
-  },
-  server: {
-    host: true,
-    port: 5173
   },
   build: {
     target: "es2020"
