@@ -3,11 +3,9 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import QRCode from "react-qr-code";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { WS_URL, BASE_URL } from "@/config";
 
 type Player = { id: string; name: string; score?: number };
-
-const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:3001";
-const BASE_URL = import.meta.env.VITE_PUBLIC_BASE_URL || window.location.origin;
 
 type Question = {
   id: string;
@@ -20,76 +18,70 @@ type Question = {
 
 export default function Room() {
   const { roomCode = "" } = useParams();
+  const ROOM = (roomCode || "").trim().toUpperCase(); // normalize
   const { state } = useLocation() as { state?: { questions?: Question[] } };
   const navigate = useNavigate();
 
   const [players, setPlayers] = useState<Player[]>([]);
   const [started, setStarted] = useState(false);
+
   const [currentQ, setCurrentQ] = useState<null | {
-    index: number; text: string; options: string[]; points: number; endsAt: number;
+    index: number;
+    text: string;
+    options: string[];
+    points: number;
+    endsAt: number;
   }>(null);
+
   const [results, setResults] = useState<null | {
-    index: number; correctIndex: number; leaderboard: Player[]; nextAt?: number;
+    index: number;
+    correctIndex: number;
+    leaderboard: Player[];
+    nextAt?: number;
   }>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const joinUrl = useMemo(() => `${BASE_URL}/play/${roomCode}`, [roomCode]);
+  const joinUrl = useMemo(() => `${BASE_URL}/play/${ROOM}`, [ROOM]);
 
   useEffect(() => {
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
+  const ws = new WebSocket(WS_URL);
+  console.log("WS connect →", WS_URL, "room:", ROOM);
+  wsRef.current = ws;
 
-    ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({ type: "subscribe", room: roomCode }));
-      if (state?.questions?.length) {
-        ws.send(JSON.stringify({ type: "load_questions", room: roomCode, questions: state.questions }));
-      }
-    });
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({ type: "subscribe", room: ROOM }));
+    if (state?.questions?.length) {
+      ws.send(JSON.stringify({ type: "load_questions", room: ROOM, questions: state.questions }));
+    }
+  });
 
-    ws.addEventListener("message", (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === "state" && msg.room === roomCode) {
-          setPlayers(msg.players || []);
-          setStarted(!!msg.started);
-        }
-        if (msg.type === "question" && msg.room === roomCode) {
-          setResults(null);
-          setCurrentQ({
-            index: msg.index,
-            text: msg.text,
-            options: msg.options,
-            points: msg.points,
-            endsAt: msg.endsAt,
-          });
-        }
-        if (msg.type === "results" && msg.room === roomCode) {
-          setResults({
-            index: msg.index,
-            correctIndex: msg.correctIndex,
-            leaderboard: msg.leaderboard,
-            nextAt: msg.nextAt
-          });
-          setCurrentQ(null);
-        }
-        if (msg.type === "final" && msg.room === roomCode) {
-          setResults({ index: -1, correctIndex: -1, leaderboard: msg.leaderboard });
-          setCurrentQ(null);
-          setStarted(false);
-        }
-      } catch {}
-    });
+  ws.addEventListener("message", (ev) => {
+    try {
+      const msg = JSON.parse(ev.data as string);
+      // ... (mevcut handler)
+    } catch {}
+  });
 
-    return () => { ws.close(); };
-  }, [roomCode, state?.questions]);
+  // 🔴 HATA LOG’LARI
+  ws.addEventListener("error", (e) => {
+    console.error("WS error (room)", e);
+    alert("WS error (room). Bak: DevTools Console");
+  });
+  ws.addEventListener("close", (e: any) => {
+    console.warn("WS close (room)", e?.code, e?.reason);
+  });
+
+  return () => { ws.close(); };
+}, [ROOM, state?.questions]);
+
 
   const copyLink = async () => {
     try { await navigator.clipboard.writeText(joinUrl); alert("Join link copied!"); }
     catch { alert("Copy failed. Link: " + joinUrl); }
   };
   const openPlayerView = () => window.open(joinUrl, "_blank");
-  const startGame = () => wsRef.current?.send(JSON.stringify({ type: "start", room: roomCode }));
-  const endGame = () => wsRef.current?.send(JSON.stringify({ type: "end", room: roomCode }));
+  const startGame = () => wsRef.current?.send(JSON.stringify({ type: "start", room: ROOM }));
+  const endGame = () => wsRef.current?.send(JSON.stringify({ type: "end", room: ROOM }));
 
   // countdowns
   const [now, setNow] = useState(Date.now());
@@ -106,7 +98,7 @@ export default function Room() {
         {/* QR + link */}
         <Card className="bg-gradient-card border-border/50">
           <CardHeader>
-            <CardTitle className="text-center">Scan to Join — Room {roomCode}</CardTitle>
+            <CardTitle className="text-center">Scan to Join — Room {ROOM}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="bg-white p-4 rounded-md flex justify-center">
@@ -155,7 +147,7 @@ export default function Room() {
             <CardContent>
               <p className="mb-4">{currentQ.text}</p>
               <div className="grid md:grid-cols-2 gap-2">
-                {currentQ.options.map((o, i) => (
+                {currentQ.options.map((o: string, i: number) => (
                   <div key={i} className="p-3 rounded border border-border bg-background/40">{o}</div>
                 ))}
               </div>
@@ -164,7 +156,7 @@ export default function Room() {
         </div>
       )}
 
-      {/* Results / Leaderboard (auto next in 5s) */}
+      {/* Results / Leaderboard */}
       {results && (
         <div className="max-w-6xl mx-auto mt-6">
           <Card className="bg-gradient-card border-border/50">
@@ -176,7 +168,9 @@ export default function Room() {
             </CardHeader>
             <CardContent className="space-y-4">
               {results.index >= 0 && (
-                <p className="text-sm text-muted-foreground">Correct: option #{results.correctIndex + 1}</p>
+                <p className="text-sm text-muted-foreground">
+                  Correct: option #{results.correctIndex + 1}
+                </p>
               )}
               <div className="space-y-2">
                 {results.leaderboard.map((p, idx) => (
