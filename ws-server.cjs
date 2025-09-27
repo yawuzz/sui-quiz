@@ -1,208 +1,339 @@
 // ws-server.cjs
-const http = require("http");
+// Node 22 + ws
 const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 3001;
+const wss = new WebSocketServer({ port: PORT });
 
-/**
- * Room state:
- * {
- *   clients: Set<ws>,
- *   players: Map<socketId, {id, name, score}>,
- *   started: boolean,
- *   questions: Array<{ id, text, options, correctIndex, points, durationSec }>,
- *   qIndex: number,
- *   answers: Map<playerId, { choice, at }>,
- *   endsAt: number,
- *   qTimer: NodeJS.Timeout | null,
- *   advanceTimer: NodeJS.Timeout | null
- * }
- */
+console.log(`WS server on ws://localhost:${PORT}`);
+
+// === Helpers ===
+function norm(code) {
+  return String(code || "").trim().toUpperCase();
+}
+function uid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+function send(ws, obj) {
+  if (ws.readyState === ws.OPEN) {
+    try {
+      ws.send(JSON.stringify(obj));
+    } catch {}
+  }
+}
+function broadcast(room, obj) {
+  const R = norm(room);
+  for (const client of wss.clients) {
+    if (client.readyState === client.OPEN && norm(client.room) === R) {
+      send(client, obj);
+    }
+  }
+}
+
+// === Room state ===
+/*
+rooms = {
+  ABC123: {
+    started: false,
+    players: Map<playerId, { id, name, score }>
+    questions: Question[],
+    currentIndex: number,
+    current: {
+      endsAt: number,
+      answers: Map<playerId, { choice, timeMs }>
+      timer: NodeJS.Timeout | null
+    }
+  }
+}
+Question = { id, text, options[], correctIndex, points, durationSec }
+*/
 const rooms = new Map();
-function getOrCreateRoom(code) {
-  if (!rooms.has(code)) {
-    rooms.set(code, {
-      clients: new Set(),
-      players: new Map(),
+
+function ensureRoom(room) {
+  const R = norm(room);
+  if (!rooms.has(R)) {
+    rooms.set(R, {
       started: false,
+      players: new Map(),
       questions: [],
-      qIndex: -1,
-      answers: new Map(),
-      endsAt: 0,
-      qTimer: null,
-      advanceTimer: null,
+      currentIndex: -1,
+      current: null,
     });
   }
-  return rooms.get(code);
+  return rooms.get(R);
 }
-function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
-function broadcast(roomCode, obj) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
-  const data = JSON.stringify(obj);
-  for (const ws of room.clients) { try { ws.send(data); } catch {} }
-}
-function sendState(roomCode) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
-  const players = Array.from(room.players.values());
-  broadcast(roomCode, { type: "state", room: roomCode, players, started: room.started });
-}
-function clearTimers(room) {
-  if (room.qTimer) { clearTimeout(room.qTimer); room.qTimer = null; }
-  if (room.advanceTimer) { clearTimeout(room.advanceTimer); room.advanceTimer = null; }
-}
-function reveal(roomCode) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
-  clearTimers(room);
 
-  const q = room.questions[room.qIndex];
-  if (!q) return;
-  const durationMs = q.durationSec * 1000;
+function getRoom(room) {
+  return rooms.get(norm(room));
+}
+
+function sendState(room) {
+  const R = norm(room);
+  const data = rooms.get(R);
+  if (!data) return;
+  const players = Array.from(data.players.values());
+  broadcast(R, { type: "state", room: R, started: !!data.started, players });
+}
+
+function scheduleResults(room) {
+  const R = norm(room);
+  const data = getRoom(R);
+  if (!data || !data.current) return;
+
+  // Sonuçları hesapla
+  const q = data.questions[data.currentIndex];
   const correct = q.correctIndex;
 
-  for (const [pid, p] of room.players) {
-    const ans = room.answers.get(pid);
-    if (!ans) continue;
+  // Skorlandırma: yanlış = 0; doğru = q.points
+  // (Daha sonra süre bonusu eklenebilir)
+  for (const [pid, ans] of data.current.answers.entries()) {
+    const player = data.players.get(pid);
+    if (!player) continue;
     if (ans.choice === correct) {
-      const base = q.points;
-      const remain = Math.max(0, room.endsAt - ans.at);
-      const bonus = Math.floor((remain / durationMs) * Math.floor(q.points / 2));
-      p.score = (p.score || 0) + base + bonus;
+      player.score = (player.score || 0) + q.points;
     }
   }
-  const leaderboard = Array.from(room.players.values())
-    .map(p => ({ id: p.id, name: p.name, score: p.score || 0 }))
+
+  // Liderlik tablosu
+  const leaderboard = Array.from(data.players.values())
+    .map((p) => ({ id: p.id, name: p.name, score: p.score || 0 }))
     .sort((a, b) => b.score - a.score);
 
-  const nextAt = Date.now() + 5000;
-  broadcast(roomCode, {
+  const nextAt = Date.now() + 5000; // 5 saniye sonra bir sonraki soru
+
+  broadcast(R, {
     type: "results",
-    room: roomCode,
-    index: room.qIndex,
+    room: R,
+    index: data.currentIndex,
     correctIndex: correct,
     leaderboard,
-    nextAt
+    nextAt,
   });
 
-  room.advanceTimer = setTimeout(() => nextQuestion(roomCode), 5000);
+  // 5sn sonra sıradaki soruya geç
+  if (data.current.timer) clearTimeout(data.current.timer);
+  data.current.timer = setTimeout(() => {
+    data.current = null;
+    nextQuestion(R);
+  }, 5000);
 }
-function endGame(roomCode) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
-  room.started = false;
-  clearTimers(room);
-  const leaderboard = Array.from(room.players.values())
-    .map(p => ({ id: p.id, name: p.name, score: p.score || 0 }))
-    .sort((a, b) => b.score - a.score);
-  broadcast(roomCode, { type: "final", room: roomCode, leaderboard });
-}
-function nextQuestion(roomCode) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
-  clearTimers(room);
 
-  room.qIndex += 1;
-  if (room.qIndex >= room.questions.length) {
-    endGame(roomCode);
+function allAnswered(room) {
+  const R = norm(room);
+  const data = getRoom(R);
+  if (!data || !data.current) return false;
+  const total = data.players.size;
+  const answered = data.current.answers.size;
+  // En az 1 oyuncu varsa ve tümü yanıtladıysa true
+  return total > 0 && answered >= total;
+}
+
+function nextQuestion(room) {
+  const R = norm(room);
+  const data = getRoom(R);
+  if (!data) return;
+
+  // Sıradaki index
+  const nextIndex = (data.currentIndex ?? -1) + 1;
+  if (!data.questions || nextIndex >= data.questions.length) {
+    // Final
+    const leaderboard = Array.from(data.players.values())
+      .map((p) => ({ id: p.id, name: p.name, score: p.score || 0 }))
+      .sort((a, b) => b.score - a.score);
+
+    broadcast(R, { type: "final", room: R, leaderboard });
+    data.started = false;
+    data.currentIndex = -1;
+    data.current = null;
     return;
   }
-  room.answers = new Map();
-  const q = room.questions[room.qIndex];
-  room.endsAt = Date.now() + q.durationSec * 1000;
 
-  broadcast(roomCode, {
+  data.currentIndex = nextIndex;
+  const q = data.questions[nextIndex];
+  const endsAt = Date.now() + (q.durationSec * 1000 || 20000);
+
+  data.current = {
+    endsAt,
+    answers: new Map(),
+    timer: null,
+  };
+
+  broadcast(R, {
     type: "question",
-    room: roomCode,
-    index: room.qIndex,
+    room: R,
+    index: nextIndex,
     text: q.text,
     options: q.options,
-    durationSec: q.durationSec,
     points: q.points,
-    endsAt: room.endsAt
+    endsAt,
   });
 
-  room.qTimer = setTimeout(() => reveal(roomCode), q.durationSec * 1000);
+  // Süre sonunda otomatik sonuç
+  data.current.timer = setTimeout(() => {
+    scheduleResults(R);
+  }, Math.max(0, endsAt - Date.now()));
 }
 
-// --- HTTP server (healthcheck için 200 OK döner) ---
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { "content-type": "text/plain" });
-  res.end("ok");
-});
+function endGame(room) {
+  const R = norm(room);
+  const data = getRoom(R);
+  if (!data) return;
 
-// --- WebSocket ---
-const wss = new WebSocketServer({ server });
-wss.on("connection", (ws) => {
-  const socketId = uid();
-  let roomCode = null;
+  if (data.current?.timer) clearTimeout(data.current.timer);
+  data.current = null;
+  data.started = false;
 
-  ws.on("message", (raw) => {
+  const leaderboard = Array.from(data.players.values())
+    .map((p) => ({ id: p.id, name: p.name, score: p.score || 0 }))
+    .sort((a, b) => b.score - a.score);
+  broadcast(R, { type: "final", room: R, leaderboard });
+}
+
+// === WS events ===
+wss.on("connection", (ws, req) => {
+  ws.id = uid();
+  ws.room = null;
+  ws.playerId = null;
+
+  // Basit ping/pong keepalive
+  ws.isAlive = true;
+  ws.on("pong", () => (ws.isAlive = true));
+
+  console.log("[WS] connection", { id: ws.id, ip: req.socket.remoteAddress });
+
+  ws.on("message", (buf) => {
     let msg;
-    try { msg = JSON.parse(raw.toString()); } catch { return; }
-    if (!msg || typeof msg !== "object") return;
+    try {
+      msg = JSON.parse(buf.toString());
+    } catch {
+      return;
+    }
+    const t = msg?.type;
 
-    if (msg.type === "subscribe" && msg.room) {
-      roomCode = msg.room;
-      const room = getOrCreateRoom(roomCode);
-      room.clients.add(ws);
-      sendState(roomCode);
+    if (t === "subscribe") {
+      const R = norm(msg.room);
+      ws.room = R;
+      ensureRoom(R);
+      console.log("[WS] subscribe", { id: ws.id, room: R });
+      sendState(R);
       return;
     }
 
-    if (!roomCode) return;
-    const room = getOrCreateRoom(roomCode);
+    if (t === "join") {
+      const R = norm(msg.room ?? ws.room);
+      const name = String(msg.name || "").trim();
+      if (!R || !name) return;
+      ensureRoom(R);
+      ws.room = R;
+      if (!ws.playerId) ws.playerId = uid();
 
-    if (msg.type === "load_questions" && Array.isArray(msg.questions)) {
-      clearTimers(room);
-      room.questions = msg.questions;
-      room.qIndex = -1;
-      room.started = false;
-      sendState(roomCode);
+      const data = getRoom(R);
+      // Aynı isimle birden fazla girişe izin veriyoruz; id bazlı tutuyoruz
+      data.players.set(ws.playerId, { id: ws.playerId, name, score: data.players.get(ws.playerId)?.score || 0 });
+      console.log("[WS] join", { room: R, name, playerId: ws.playerId });
+      sendState(R);
       return;
     }
-    if (msg.type === "join" && msg.name) {
-      room.players.set(socketId, { id: socketId, name: String(msg.name), score: 0 });
-      sendState(roomCode);
-      return;
-    }
-    if (msg.type === "leave") {
-      room.players.delete(socketId);
-      sendState(roomCode);
-      return;
-    }
-    if (msg.type === "start") {
-      room.started = true;
-      sendState(roomCode);
-      nextQuestion(roomCode);
-      return;
-    }
-    if (msg.type === "next") { if (!room.qTimer) nextQuestion(roomCode); return; }
-    if (msg.type === "end")  { endGame(roomCode); return; }
-    if (msg.type === "answer" && typeof msg.index === "number" && typeof msg.choice === "number") {
-      if (msg.index !== room.qIndex) return;
-      if (Date.now() > room.endsAt) return;
-      if (room.answers.has(socketId)) return;
-      room.answers.set(socketId, { choice: msg.choice, at: Date.now() });
 
-      if (room.answers.size >= room.players.size && room.players.size > 0) {
-        if (room.qTimer) { clearTimeout(room.qTimer); room.qTimer = null; }
-        reveal(roomCode);
+    if (t === "leave") {
+      const R = norm(msg.room ?? ws.room);
+      const data = getRoom(R);
+      if (data && ws.playerId) {
+        data.players.delete(ws.playerId);
       }
+      console.log("[WS] leave", { room: R, playerId: ws.playerId });
+      sendState(R);
+      return;
+    }
+
+    if (t === "load_questions") {
+      const R = norm(msg.room ?? ws.room);
+      const qs = Array.isArray(msg.questions) ? msg.questions : [];
+      const data = ensureRoom(R);
+      data.questions = qs.map((q) => ({
+        id: String(q.id || uid()),
+        text: String(q.text || ""),
+        options: Array.isArray(q.options) ? q.options.map(String) : [],
+        correctIndex: Number.isFinite(q.correctIndex) ? q.correctIndex : 0,
+        points: Number.isFinite(q.points) ? q.points : 100,
+        durationSec: Number.isFinite(q.durationSec) ? q.durationSec : 20,
+      }));
+      console.log("[WS] load_questions", { room: R, count: data.questions.length });
+      sendState(R);
+      return;
+    }
+
+    if (t === "start") {
+      const R = norm(msg.room ?? ws.room);
+      const data = ensureRoom(R);
+      if (!data.questions || data.questions.length === 0) {
+        console.log("[WS] start ignored (no questions)", { room: R });
+        return;
+      }
+      data.started = true;
+      data.currentIndex = -1;
+      // Sıfırla skorlar (istenirse)
+      for (const p of data.players.values()) {
+        p.score = 0;
+      }
+      console.log("[WS] start", { room: R, players: data.players.size });
+      sendState(R);
+      nextQuestion(R);
+      return;
+    }
+
+    if (t === "answer") {
+      const R = norm(msg.room ?? ws.room);
+      const data = getRoom(R);
+      if (!data || !data.started || !data.current) return;
+      if (!ws.playerId) return;
+
+      const idx = Number(msg.index);
+      const choice = Number(msg.choice);
+      if (!Number.isFinite(idx) || idx !== data.currentIndex) return;
+      if (!Number.isFinite(choice)) return;
+
+      if (!data.current.answers.has(ws.playerId)) {
+        data.current.answers.set(ws.playerId, { choice, timeMs: Date.now() });
+        // Herkes yanıtladıysa anında sonuç
+        if (allAnswered(R)) {
+          // Süre timer'ı varsa iptal et
+          if (data.current.timer) clearTimeout(data.current.timer);
+          scheduleResults(R);
+        }
+      }
+      return;
+    }
+
+    if (t === "end") {
+      const R = norm(msg.room ?? ws.room);
+      console.log("[WS] end", { room: R });
+      endGame(R);
       return;
     }
   });
 
   ws.on("close", () => {
-    if (!roomCode) return;
-    const room = getOrCreateRoom(roomCode);
-    room.clients.delete(ws);
-    room.players.delete(socketId);
-    sendState(roomCode);
+    const R = norm(ws.room);
+    const data = getRoom(R);
+    if (data && ws.playerId) {
+      data.players.delete(ws.playerId);
+      sendState(R);
+    }
+    console.log("[WS] close", { id: ws.id, room: ws.room, playerId: ws.playerId });
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`WS server on ws://localhost:${PORT}`);
-});
+// Keepalive (Render free instance’larda uzun süreli bağlantılara yardımcı olur)
+const pingInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      try { ws.terminate(); } catch {}
+      continue;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch {}
+  }
+}, 30000);
+
+wss.on("close", () => clearInterval(pingInterval));
