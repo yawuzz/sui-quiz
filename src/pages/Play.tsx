@@ -1,14 +1,16 @@
+// src/Pages/Play.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { WS_URL, BASE_URL } from "../config"; // yol senin yapıya göre ../config veya ../../config
+import { WS_URL } from "../config"; // config.ts: WS_URL = "wss://suiloop.onrender.com/ws" (veya env)
 
+type LeaderboardPlayer = { id: string; name: string; score: number };
 
 export default function Play() {
   const { roomCode = "" } = useParams();
-  const ROOM = (roomCode || "").trim().toUpperCase(); // normalize
+  const ROOM = (roomCode || "").trim().toUpperCase();
 
   const [sp, setSp] = useSearchParams();
   const navigate = useNavigate();
@@ -23,53 +25,122 @@ export default function Play() {
     text: string;
     options: string[];
     points: number;
-    endsAt: number;
+    endsAt: number; // ms epoch
   }>(null);
 
   const [picked, setPicked] = useState<number | null>(null);
 
   const [results, setResults] = useState<null | {
-    index: number;
+    index: number; // -1 => final
     correctIndex: number;
-    leaderboard: Array<{ id: string; name: string; score: number }>;
-    nextAt?: number;
+    leaderboard: LeaderboardPlayer[];
+    nextAt?: number; // ms epoch (sonraki soruya otomatik geçiş)
   }>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Oda kodu yoksa WS açma
+  if (!ROOM) {
+    return (
+      <div className="min-h-screen bg-gradient-background p-6">
+        <div className="max-w-xl mx-auto">
+          <Card className="bg-gradient-card border-border/50">
+            <CardHeader>
+              <CardTitle className="text-center">Join Quiz</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                Missing room code. Use a link like <code>/play/ABC123</code>.
+              </p>
+              <div className="pt-3">
+                <Button onClick={() => navigate("/")}>Home</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   useEffect(() => {
-  const ws = new WebSocket(WS_URL);
-  console.log("WS connect →", WS_URL, "room:", ROOM);
-  wsRef.current = ws;
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+    console.log("WS connect →", WS_URL, "room:", ROOM);
 
-  ws.addEventListener("open", () => {
-    ws.send(JSON.stringify({ type: "subscribe", room: ROOM }));
-    if (initialName) {
-      ws.send(JSON.stringify({ type: "join", room: ROOM, name: initialName }));
-    }
-  });
+    ws.addEventListener("open", () => {
+      ws.send(JSON.stringify({ type: "subscribe", room: ROOM }));
+      if (initialName) {
+        ws.send(JSON.stringify({ type: "join", room: ROOM, name: initialName }));
+      }
+    });
 
-  ws.addEventListener("message", (ev) => {
-    try {
-      const msg = JSON.parse(ev.data as string);
-      // ... (mevcut handler)
-    } catch {}
-  });
+    ws.addEventListener("message", (ev: MessageEvent) => {
+      try {
+        const msg = JSON.parse(ev.data as string);
 
-  // 🔴 HATA LOG’LARI
-  ws.addEventListener("error", (e) => {
-    console.error("WS error (play)", e);
-    alert("WS error (play). Bak: DevTools Console");
-  });
-  ws.addEventListener("close", (e: any) => {
-    console.warn("WS close (play)", e?.code, e?.reason);
-    // Kapanma kodu üretirse gör
-  });
+        // Beklediğimiz mesaj tipleri:
+        // {type:"state", room, started:boolean}
+        // {type:"question", room, index, text, options, points, endsAt}
+        // {type:"results", room, index, correctIndex, leaderboard, nextAt?}
+        // {type:"final", room, leaderboard}
+        if (!msg || msg.room !== ROOM) return;
 
-  return () => { ws.close(); };
-}, [ROOM, initialName]);
+        if (msg.type === "state") {
+          setStarted(!!msg.started);
+          return;
+        }
+        if (msg.type === "question") {
+          setResults(null);
+          setPicked(null);
+          setCurrentQ({
+            index: msg.index,
+            text: msg.text,
+            options: msg.options,
+            points: msg.points,
+            endsAt: msg.endsAt,
+          });
+          return;
+        }
+        if (msg.type === "results") {
+          setResults({
+            index: msg.index,
+            correctIndex: msg.correctIndex,
+            leaderboard: msg.leaderboard || [],
+            nextAt: msg.nextAt,
+          });
+          setCurrentQ(null);
+          return;
+        }
+        if (msg.type === "final") {
+          setResults({
+            index: -1,
+            correctIndex: -1,
+            leaderboard: msg.leaderboard || [],
+          });
+          setCurrentQ(null);
+          setStarted(false);
+          return;
+        }
+      } catch (e) {
+        console.warn("WS parse error (play):", e);
+      }
+    });
 
+    ws.addEventListener("error", (e) => {
+      console.error("WS error (play)", e);
+      alert("WS error (play). Check DevTools Console.");
+    });
+    ws.addEventListener("close", (e: CloseEvent) => {
+      console.warn("WS close (play)", e.code, e.reason);
+    });
 
+    return () => {
+      try { ws.close(); } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ROOM, initialName]);
+
+  // URL'de ?name=… senkronu
   useEffect(() => {
     if (name && sp.get("name") !== name) {
       const next = new URLSearchParams(sp);
@@ -87,7 +158,9 @@ export default function Play() {
   }
 
   function leave() {
-    wsRef.current?.send(JSON.stringify({ type: "leave", room: ROOM }));
+    try {
+      wsRef.current?.send(JSON.stringify({ type: "leave", room: ROOM }));
+    } catch {}
     setJoined(false);
     setName("");
     const next = new URLSearchParams(sp);
@@ -98,12 +171,12 @@ export default function Play() {
 
   function pick(i: number) {
     if (!currentQ) return;
-    if (picked !== null) return;
+    if (picked !== null) return; // tek cevap
     setPicked(i);
     wsRef.current?.send(JSON.stringify({ type: "answer", room: ROOM, index: currentQ.index, choice: i }));
   }
 
-  // countdowns
+  // basit geri sayım (soru/sonraki geçiş)
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 200);
@@ -143,10 +216,12 @@ export default function Play() {
 
                 {currentQ && (
                   <div className="space-y-3">
-                    <div className="text-sm text-muted-foreground">Time left: {remainSecQ}s • {currentQ.points} pts</div>
+                    <div className="text-sm text-muted-foreground">
+                      Time left: {remainSecQ}s • {currentQ.points} pts
+                    </div>
                     <div className="font-medium">{currentQ.text}</div>
                     <div className="grid grid-cols-1 gap-2">
-                      {currentQ.options.map((o: string, i: number) => (
+                      {currentQ.options.map((o, i) => (
                         <button
                           key={i}
                           onClick={() => pick(i)}
@@ -159,7 +234,9 @@ export default function Play() {
                         </button>
                       ))}
                     </div>
-                    {picked !== null && <div className="text-xs text-muted-foreground">Answer locked.</div>}
+                    {picked !== null && (
+                      <div className="text-xs text-muted-foreground">Answer locked.</div>
+                    )}
                   </div>
                 )}
 
@@ -170,11 +247,16 @@ export default function Play() {
                       {results.index >= 0 && results.nextAt ? ` • Next in ${remainSecNext}s` : ""}
                     </div>
                     {results.index >= 0 && (
-                      <div className="text-xs text-muted-foreground">Correct: option #{results.correctIndex + 1}</div>
+                      <div className="text-xs text-muted-foreground">
+                        Correct: option #{results.correctIndex + 1}
+                      </div>
                     )}
                     <div className="space-y-2">
                       {results.leaderboard.map((p, idx) => (
-                        <div key={p.id} className="flex items-center justify-between p-2 rounded border border-border bg-background/40">
+                        <div
+                          key={p.id}
+                          className="flex items-center justify-between p-2 rounded border border-border bg-background/40"
+                        >
                           <span>{idx + 1}. {p.name}</span>
                           <span className="text-xs">{p.score} pts</span>
                         </div>
