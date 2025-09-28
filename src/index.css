@@ -24,3 +24,47 @@ html, body, #root { height: 100%; }
 .text-muted-foreground { color: var(--muted); }
 .text-primary { color: var(--primary); }
 .bg-background\/50 { background-color: rgba(11,16,32,.5); } /* escaped slash */
+
+.bg-background\/30 { background-color: rgba(11, 16, 32, .30); }
+.bg-background\/40 { background-color: rgba(11, 16, 32, .40); }
+.border-border\/30 { border-color: rgba(39, 49, 74, .30); }
+.border-border\/50 { border-color: rgba(39, 49, 74, .50); }
+
+/* primary */
+.bg-primary\/20   { background-color: rgba(110, 168, 254, .20); }
+.border-primary   { border-color: var(--primary); }
+
+/* success / accent / destructive / muted */
+:root {
+  --success: #22c55e;   /* yeşil */
+  --accent:  #22d3ee;   /* camgöbeği */
+  --destructive: #ef4444; /* kırmızı */
+}
+.text-success        { color: var(--success); }
+.bg-success\/20      { background-color: rgba(34, 197, 94, .20); }
+.border-success\/30  { border-color: rgba(34, 197, 94, .30); }
+.border-success\/50  { border-color: rgba(34, 197, 94, .50); }
+
+.text-accent         { color: var(--accent); }
+
+.text-destructive    { color: var(--destructive); }
+.border-destructive  { border-color: var(--destructive); }
+.hover\:bg-destructive\/10:hover { background-color: rgba(239, 68, 68, .10); }
+
+.bg-muted\/30        { background-color: rgba(152, 162, 179, .30); }
+
+/* gradient butonlar + glow efektleri */
+.bg-gradient-primary {
+  background-image: linear-gradient(90deg, #6ea8fe, #22d3ee);
+  color: #0b1020;
+}
+.bg-gradient-secondary {
+  background-image: linear-gradient(90deg, #22d3ee, #6ea8fe);
+  color: #0b1020;
+}
+.hover\:shadow-glow:hover {
+  box-shadow: 0 0 18px rgba(110, 168, 254, .35);
+}
+.hover\:shadow-secondary:hover {
+  box-shadow: 0 0 18px rgba(34, 211, 238, .35);
+}
