@@ -12,15 +12,14 @@ type Mode = "pick" | "create";
 
 export default function HostDashboard() {
   const navigate = useNavigate();
-
   const [roomCode] = useState(() =>
     Math.random().toString(36).substring(2, 8).toUpperCase()
   );
 
-  // ---- Tabs
+  // Tabs
   const [mode, setMode] = useState<Mode>("pick");
 
-  // ---- Pick a Quiz
+  // Pick a Quiz
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedQuiz: Quiz | null = useMemo(
     () => QUIZZES.find((q) => q.id === selectedId) || null,
@@ -28,7 +27,11 @@ export default function HostDashboard() {
   );
   const [durationOverride, setDurationOverride] = useState<number>(20);
 
-  // ---- Create Your Own
+  // Prize pool (fake balance for now)
+  const [prizePool, setPrizePool] = useState<number>(100); // “fake coins”
+  const payout = [50, 30, 20]; // percentage split
+
+  // Create your own
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState<{
     text: string;
@@ -80,12 +83,15 @@ export default function HostDashboard() {
     let qs: Question[] = [];
     if (mode === "pick" && selectedQuiz) {
       const sec = Math.max(5, Number(durationOverride) || 20);
-      qs = selectedQuiz.questions.map(q => ({ ...q, durationSec: sec }));
+      qs = selectedQuiz.questions.map((q) => ({ ...q, durationSec: sec }));
     }
     if (mode === "create") qs = questions;
 
     if (qs.length === 0) return;
-    navigate(`/room/${roomCode}`, { state: { questions: qs } });
+    // pass prize pool + payout to Room
+    navigate(`/room/${roomCode}`, {
+      state: { questions: qs, prizePool, payout },
+    });
   };
 
   return (
@@ -125,12 +131,38 @@ export default function HostDashboard() {
           </Button>
         </div>
 
+        {/* Prize pool */}
+        <Card className="bg-gradient-card border-border/50">
+          <CardHeader>
+            <CardTitle>Prize Pool (fake)</CardTitle>
+          </CardHeader>
+          <CardContent className="grid sm:grid-cols-3 gap-4">
+            <div className="sm:col-span-1">
+              <label className="text-sm text-foreground mb-2 block">
+                Total amount
+              </label>
+              <Input
+                type="number"
+                min={0}
+                value={prizePool}
+                onChange={(e) => setPrizePool(Math.max(0, Number(e.target.value)))}
+                className="bg-background/50 border-border"
+              />
+            </div>
+            <div className="sm:col-span-2 flex items-end text-sm text-muted-foreground">
+              Split: <span className="ml-2 font-medium text-foreground">1st {payout[0]}% • 2nd {payout[1]}% • 3rd {payout[2]}%</span>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Tabs */}
         <div className="inline-flex rounded-md border border-border overflow-hidden">
           <button
             onClick={() => setMode("pick")}
             className={`px-4 py-2 text-sm ${
-              mode === "pick" ? "bg-primary text-primary-foreground" : "bg-card text-foreground"
+              mode === "pick"
+                ? "bg-primary text-primary-foreground"
+                : "bg-card text-foreground"
             }`}
           >
             Pick a Quiz
@@ -138,7 +170,9 @@ export default function HostDashboard() {
           <button
             onClick={() => setMode("create")}
             className={`px-4 py-2 text-sm border-l border-border ${
-              mode === "create" ? "bg-primary text-primary-foreground" : "bg-card text-foreground"
+              mode === "create"
+                ? "bg-primary text-primary-foreground"
+                : "bg-card text-foreground"
             }`}
           >
             Create your own quiz
@@ -155,8 +189,10 @@ export default function HostDashboard() {
                   <Card
                     key={q.id}
                     className={`cursor-pointer border ${
-                      selected ? "border-primary ring-2 ring-primary/40" : "border-border/50"
-                    }`}
+                      selected
+                        ? "border-primary ring-2 ring-primary/40"
+                        : "border-border/50"
+                    } bg-gradient-to-tr from-sky-500/5 to-blue-500/5`}
                     onClick={() => setSelectedId(q.id)}
                   >
                     <CardHeader>
@@ -164,7 +200,9 @@ export default function HostDashboard() {
                         <span>{q.title}</span>
                         <span
                           className={`text-xs px-2 py-1 rounded ${
-                            selected ? "bg-primary text-primary-foreground" : "bg-muted/30"
+                            selected
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted/30"
                           }`}
                         >
                           {selected ? "Selected" : "Pick"}
@@ -173,7 +211,9 @@ export default function HostDashboard() {
                     </CardHeader>
                     <CardContent>
                       {q.description && (
-                        <p className="text-sm text-muted-foreground">{q.description}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {q.description}
+                        </p>
                       )}
                       <p className="text-xs text-muted-foreground mt-2">
                         {q.questions.length} questions • answers pre-set
@@ -193,11 +233,13 @@ export default function HostDashboard() {
                 type="number"
                 min={5}
                 value={durationOverride}
-                onChange={(e) => setDurationOverride(Math.max(5, Number(e.target.value)))}
+                onChange={(e) =>
+                  setDurationOverride(Math.max(5, Number(e.target.value)))
+                }
                 className="w-full h-10 rounded-md bg-background/50 border border-border px-3 text-sm"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                This will override durations of the selected quiz.
+                This overrides durations of the selected quiz.
               </p>
             </div>
           </>
@@ -215,7 +257,7 @@ export default function HostDashboard() {
   );
 }
 
-/* ---------- Create View (custom builder) ---------- */
+/* ---------- Create View ---------- */
 function CreateView({
   currentQuestion,
   setCurrentQuestion,
@@ -267,7 +309,9 @@ function CreateView({
                   <label className="text-sm font-medium text-foreground mb-2 block">
                     Option {i + 1}
                     {i === currentQuestion.correctIndex && (
-                      <Badge className="ml-2 bg-success/20 text-success">Correct</Badge>
+                      <Badge className="ml-2 bg-success/20 text-success">
+                        Correct
+                      </Badge>
                     )}
                   </label>
                   <Input
@@ -374,7 +418,9 @@ function CreateView({
                             {q.points} pts
                           </span>
                         </div>
-                        <p className="font-medium text-foreground mb-2">{q.text}</p>
+                        <p className="font-medium text-foreground mb-2">
+                          {q.text}
+                        </p>
                         <div className="grid grid-cols-2 gap-2 text-sm">
                           {q.options.map((opt, oi) => (
                             <span
