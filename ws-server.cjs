@@ -1,10 +1,10 @@
 // ws-server.cjs
-// HTTP + WebSocket aynı portta. WS path: /ws
+// HTTP + WebSocket aynı portta, WS path: /ws
 const http = require("http");
 const crypto = require("crypto");
 const { WebSocketServer } = require("ws");
 
-// --- Mini HTTP (Render health + kök sayfa) ---
+// --- Mini HTTP (health + basit kök sayfa) ---
 const server = http.createServer((req, res) => {
   if (req.url === "/healthz") {
     res.writeHead(200, { "Content-Type": "text/plain" });
@@ -20,7 +20,7 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`HTTP on http://0.0.0.0:${PORT}  |  WS on ws://0.0.0.0:${PORT}/ws`);
 });
 
-// --- WS ---
+// --- WS upgrade sadece /ws için ---
 const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
   if (!req.url || !req.url.startsWith("/ws")) {
@@ -33,17 +33,15 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // --- In-memory state ---
-/**
- * rooms: Map<roomCode, {
- *   players: Map<WebSocket, { id, name, score, ws, address?: string|null }>,
- *   started: boolean,
- *   questions: Array<{ id,text,options,correctIndex,points,durationSec }>,
- *   currentIndex: number,
- *   currentEndsAt: number,
- *   answers: Map<string /*playerId*\/, number /*choice*\/>,
- *   timer?: NodeJS.Timeout,
- * }>
- */
+// rooms: Map<roomCode, {
+//   players: Map<WebSocket, { id, name, score, ws, addr: string|null }>,
+//   started: boolean,
+//   questions: Array<{ id,text,options,correctIndex,points,durationSec }>,
+//   currentIndex: number,
+//   currentEndsAt: number,
+//   answers: Map<string /*playerId*/, number /*choice*/>,
+//   timer?: NodeJS.Timeout,
+// }>
 const rooms = new Map();
 
 // --- Helpers ---
@@ -54,19 +52,21 @@ function broadcast(roomCode, msg) {
   for (const [ws] of r.players) {
     try { ws.send(data); } catch {}
   }
-  // Host ekranını da güncellemek istiyorsan ayrıca host ws saklayabilirsin.
 }
 
 function sendState(roomCode) {
   const r = rooms.get(roomCode);
   if (!r) return;
   const players = [...r.players.values()].map((p) => ({
-    id: p.id, name: p.name, score: p.score, address: p.address || null
+    id: p.id,
+    name: p.name,
+    score: p.score,
+    addr: p.addr || null,
   }));
   broadcast(roomCode, { type: "state", room: roomCode, started: r.started, players });
 }
 
-function currentQuestion(roomCode) {
+function getCurrentQuestion(roomCode) {
   const r = rooms.get(roomCode);
   if (!r) return null;
   if (r.currentIndex < 0 || r.currentIndex >= r.questions.length) return null;
@@ -80,16 +80,14 @@ function startQuestion(roomCode) {
   r.currentIndex += 1;
   r.answers = new Map();
 
-  const q = currentQuestion(roomCode);
+  const q = getCurrentQuestion(roomCode);
   if (!q) {
-    // final
     finalize(roomCode);
     return;
   }
 
   r.currentEndsAt = Date.now() + q.durationSec * 1000;
 
-  // Yayınla
   broadcast(roomCode, {
     type: "question",
     room: roomCode,
@@ -108,13 +106,13 @@ function finishQuestion(roomCode) {
   const r = rooms.get(roomCode);
   if (!r) return;
 
-  const q = currentQuestion(roomCode);
+  const q = getCurrentQuestion(roomCode);
   if (!q) {
     finalize(roomCode);
     return;
   }
 
-  // Puanlama: sadece doğruya puan. (Zaman bonusunu sonra ekleyebiliriz)
+  // Puanlama: sadece doğru cevaba puan
   for (const p of r.players.values()) {
     const choice = r.answers.get(p.id);
     if (choice === q.correctIndex) {
@@ -122,12 +120,11 @@ function finishQuestion(roomCode) {
     }
   }
 
-  // Leaderboard
   const leaderboard = [...r.players.values()]
-    .sort((a, b) => b.score - a.score)
-    .map((p) => ({ id: p.id, name: p.name, score: p.score, address: p.address || null }));
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .map((p) => ({ id: p.id, name: p.name, score: p.score || 0, addr: p.addr || null }));
 
-  const nextAt = Date.now() + 5000; // 5 sn sonra otomatik sonraki
+  const nextAt = Date.now() + 5000; // 5 sn sonra otomatik sonraki soru
   broadcast(roomCode, {
     type: "results",
     room: roomCode,
@@ -147,8 +144,8 @@ function finalize(roomCode) {
   if (r.timer) clearTimeout(r.timer);
 
   const leaderboard = [...r.players.values()]
-    .sort((a, b) => b.score - a.score)
-    .map((p) => ({ id: p.id, name: p.name, score: p.score, address: p.address || null }));
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .map((p) => ({ id: p.id, name: p.name, score: p.score || 0, addr: p.addr || null }));
 
   r.started = false;
   r.currentIndex = -1;
@@ -183,12 +180,11 @@ wss.on("connection", (ws) => {
           timer: undefined,
         });
       }
-      // State gönder
       sendState(room);
       return;
     }
 
-    if (!myRoom) return; // önce subscribe gerekli
+    if (!myRoom) return; // önce subscribe edilmeli
     const r = rooms.get(myRoom);
     if (!r) return;
 
@@ -204,8 +200,7 @@ wss.on("connection", (ws) => {
       }
 
       case "start": {
-        if (r.questions.length === 0) return;
-        if (r.started) return;
+        if (r.questions.length === 0 || r.started) return;
         r.started = true;
         startQuestion(myRoom);
         sendState(myRoom);
@@ -219,7 +214,8 @@ wss.on("connection", (ws) => {
 
       case "join": {
         const name = String(msg.name || "Player");
-        const address = msg.address || null;
+        // client hem `addr` hem `address` gönderebilir; ikisini de destekle
+        const addr = msg.addr || msg.address || null;
         const id = crypto.randomUUID();
         myId = id;
 
@@ -228,7 +224,7 @@ wss.on("connection", (ws) => {
           name,
           score: 0,
           ws,
-          address,
+          addr,
         });
 
         sendState(myRoom);
@@ -246,20 +242,14 @@ wss.on("connection", (ws) => {
       case "answer": {
         const { index, choice } = msg;
         if (!r.started) return;
-        if (index !== r.currentIndex) return; // farklı soru
-        if (Date.now() > r.currentEndsAt) return; // süre doldu
+        if (index !== r.currentIndex) return;           // farklı soru
+        if (Date.now() > r.currentEndsAt) return;       // süre doldu
+        if (!myId) return;                               // join edilmemiş
 
-        if (!myId) {
-          // join edilmemişse yok say
-          return;
-        }
-        if (r.answers.has(myId)) {
-          // 2. kez cevap verme
-          return;
-        }
+        if (r.answers.has(myId)) return;                 // ikinci cevap yok
         r.answers.set(myId, Number(choice));
 
-        // herkes cevapladıysa bitir
+        // herkes cevapladıysa beklemeden bitir
         const total = r.players.size;
         const answered = r.answers.size;
         if (total > 0 && answered >= total) {
