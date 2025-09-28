@@ -1,4 +1,3 @@
-// ws-server.cjs
 // HTTP + WebSocket aynı portta, WS path: /ws
 const http = require("http");
 const crypto = require("crypto");
@@ -27,6 +26,10 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
+  try {
+    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+    console.log("[UPGRADE]", req.url, "from", ip);
+  } catch {}
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit("connection", ws, req);
   });
@@ -88,6 +91,8 @@ function startQuestion(roomCode) {
 
   r.currentEndsAt = Date.now() + q.durationSec * 1000;
 
+  console.log("[WS]", roomCode, "question →", r.currentIndex, `"${q.text.slice(0, 40)}..."`);
+
   broadcast(roomCode, {
     type: "question",
     room: roomCode,
@@ -124,6 +129,8 @@ function finishQuestion(roomCode) {
     .sort((a, b) => (b.score || 0) - (a.score || 0))
     .map((p) => ({ id: p.id, name: p.name, score: p.score || 0, addr: p.addr || null }));
 
+  console.log("[WS]", roomCode, "results Q", r.currentIndex, "answers:", r.answers.size, "/", r.players.size);
+
   const nextAt = Date.now() + 5000; // 5 sn sonra otomatik sonraki soru
   broadcast(roomCode, {
     type: "results",
@@ -151,6 +158,7 @@ function finalize(roomCode) {
   r.currentIndex = -1;
   r.currentEndsAt = 0;
 
+  console.log("[WS]", roomCode, "finalize, players:", r.players.size);
   broadcast(roomCode, { type: "final", room: roomCode, leaderboard });
 }
 
@@ -168,6 +176,7 @@ wss.on("connection", (ws) => {
       const room = String(msg.room || "").toUpperCase();
       if (!room) return;
       myRoom = room;
+      console.log("[WS] subscribe →", room);
 
       if (!rooms.has(room)) {
         rooms.set(room, {
@@ -195,11 +204,13 @@ wss.on("connection", (ws) => {
         r.currentIndex = -1;
         r.currentEndsAt = 0;
         r.answers = new Map();
+        console.log("[WS]", myRoom, "load_questions:", r.questions.length);
         sendState(myRoom);
         break;
       }
 
       case "start": {
+        console.log("[WS]", myRoom, "start");
         if (r.questions.length === 0 || r.started) return;
         r.started = true;
         startQuestion(myRoom);
@@ -208,6 +219,7 @@ wss.on("connection", (ws) => {
       }
 
       case "end": {
+        console.log("[WS]", myRoom, "end");
         finalize(myRoom);
         break;
       }
@@ -227,6 +239,7 @@ wss.on("connection", (ws) => {
           addr,
         });
 
+        console.log("[WS]", myRoom, "join:", name, "players:", r.players.size);
         sendState(myRoom);
         break;
       }
@@ -234,6 +247,7 @@ wss.on("connection", (ws) => {
       case "leave": {
         if (r.players.has(ws)) {
           r.players.delete(ws);
+          console.log("[WS]", myRoom, "leave → players:", r.players.size);
           sendState(myRoom);
         }
         break;
@@ -245,9 +259,10 @@ wss.on("connection", (ws) => {
         if (index !== r.currentIndex) return;           // farklı soru
         if (Date.now() > r.currentEndsAt) return;       // süre doldu
         if (!myId) return;                               // join edilmemiş
-
         if (r.answers.has(myId)) return;                 // ikinci cevap yok
+
         r.answers.set(myId, Number(choice));
+        console.log("[WS]", myRoom, "answer from", myId, "choice:", choice, "progress:", r.answers.size, "/", r.players.size);
 
         // herkes cevapladıysa beklemeden bitir
         const total = r.players.size;
@@ -266,6 +281,7 @@ wss.on("connection", (ws) => {
       const r = rooms.get(myRoom);
       if (r && r.players.has(ws)) {
         r.players.delete(ws);
+        console.log("[WS]", myRoom, "disconnect → players:", r.players.size);
         sendState(myRoom);
       }
     }

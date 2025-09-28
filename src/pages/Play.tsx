@@ -1,4 +1,3 @@
-// src/pages/Play.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +31,7 @@ export default function Play() {
 
   const wsRef = useRef<WebSocket | null>(null);
 
+  // room code yoksa kısa dönüş
   if (!ROOM) {
     return (
       <div className="min-h-screen bg-gradient-background p-6">
@@ -48,11 +48,28 @@ export default function Play() {
     );
   }
 
+  // WS hazır değilse "open" olduğunda bir kere gönder
+  function safeSend(obj: any) {
+    const ws = wsRef.current;
+    if (!ws) return;
+    const data = JSON.stringify(obj);
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    } else {
+      const onOpen = () => {
+        try { ws.send(data); } finally { ws.removeEventListener("open", onOpen); }
+      };
+      ws.addEventListener("open", onOpen);
+    }
+  }
+
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
+    console.log("[PLAY] WS connect →", WS_URL, "room:", ROOM);
 
     ws.addEventListener("open", () => {
+      console.log("[PLAY] WS open → subscribe", ROOM);
       ws.send(JSON.stringify({ type: "subscribe", room: ROOM }));
       if (initialName && account?.address) {
         ws.send(JSON.stringify({ type: "join", room: ROOM, name: initialName, addr: account.address }));
@@ -77,13 +94,24 @@ export default function Play() {
           setResults({ index: -1, correctIndex: -1, leaderboard: msg.leaderboard || [] });
           setCurrentQ(null); setStarted(false); return;
         }
-      } catch {}
+      } catch (e) {
+        console.warn("[PLAY] WS parse error:", e);
+      }
+    });
+
+    ws.addEventListener("error", (e) => {
+      console.error("[PLAY] WS error", e);
+    });
+
+    ws.addEventListener("close", (e) => {
+      console.warn("[PLAY] WS close", e.code, e.reason);
     });
 
     return () => { try { ws.close(); } catch {} };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // initialName ve account değiştiğinde open'da auto-join tekrar denensin
   }, [ROOM, initialName, account?.address]);
 
+  // URL'de ?name= senkronu
   useEffect(() => {
     if (name && sp.get("name") !== name) {
       const next = new URLSearchParams(sp); next.set("name", name); setSp(next, { replace: true });
@@ -94,13 +122,14 @@ export default function Play() {
     const trimmed = name.trim();
     if (!trimmed || !account?.address) return;
     setName(trimmed); setJoined(true);
-    wsRef.current?.send(JSON.stringify({ type: "join", room: ROOM, name: trimmed, addr: account.address }));
+    // hazır değilse open’da otomatik göndersin:
+    safeSend({ type: "join", room: ROOM, name: trimmed, addr: account.address });
   }
 
   function pick(i: number) {
     if (!currentQ || picked !== null) return;
     setPicked(i);
-    wsRef.current?.send(JSON.stringify({ type: "answer", room: ROOM, index: currentQ.index, choice: i }));
+    safeSend({ type: "answer", room: ROOM, index: currentQ.index, choice: i });
   }
 
   const [now, setNow] = useState(Date.now());
@@ -126,7 +155,12 @@ export default function Play() {
               <>
                 <label className="text-sm font-medium text-foreground block">Your Name</label>
                 <div className="flex gap-2">
-                  <Input value={name} onChange={(e) => setName(e.target.value)} className="bg-background/50 border-border" />
+                  <Input
+                    placeholder="e.g. Alice"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="bg-background/50 border-border"
+                  />
                   <Button disabled={!name.trim()} onClick={doJoin}>Join</Button>
                 </div>
               </>
@@ -136,7 +170,7 @@ export default function Play() {
               <>
                 {!currentQ && !results && (
                   <p className="text-sm text-muted-foreground">
-                    Welcome, <b>{name}</b> — waiting for host…
+                    Welcome, <b>{name}</b> — {started ? "waiting for next question…" : "waiting for host…"}
                   </p>
                 )}
 
@@ -146,8 +180,14 @@ export default function Play() {
                     <div className="font-medium">{currentQ.text}</div>
                     <div className="grid grid-cols-1 gap-2">
                       {currentQ.options.map((o, i) => (
-                        <button key={i} onClick={() => pick(i)} disabled={picked !== null}
-                          className={`text-left p-3 rounded border ${picked === i ? "bg-primary/20 border-primary" : "bg-background/40 border-border"}`}>
+                        <button
+                          key={i}
+                          onClick={() => pick(i)}
+                          disabled={picked !== null}
+                          className={`text-left p-3 rounded border ${
+                            picked === i ? "bg-primary/20 border-primary" : "bg-background/40 border-border"
+                          }`}
+                        >
                           {o}
                         </button>
                       ))}
