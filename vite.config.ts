@@ -1,22 +1,14 @@
+// vite.config.ts
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
-import { nodePolyfills } from "vite-plugin-node-polyfills";
 
 export default defineConfig({
-  plugins: [
-    react(),
-    nodePolyfills({
-      include: ["buffer", "process"]
-    })
-  ],
-  resolve: {
-    alias: { "@": path.resolve(__dirname, "src") }
-  },
+  plugins: [react()],
+  resolve: { alias: { "@": path.resolve(__dirname, "src") } },
   define: {
-    global: "globalThis"
+    global: "globalThis",
+    "process.env": {}, // bazı paketlerin process.env kullanımını stub’lar
   },
-  build: {
-    target: "es2020"
-  }
+  build: { target: "es2020" },
 });

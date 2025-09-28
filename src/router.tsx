@@ -1,7 +1,7 @@
 // src/router.tsx
 import { createBrowserRouter } from "react-router-dom";
 
-import Home from "src/pages/Home";
+import Home from "@/pages/Home";
 import HostDashboard from "./pages/HostDashboard";
 import Room from "./pages/Room";
 import Play from "./pages/Play";
