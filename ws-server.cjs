@@ -35,9 +35,9 @@ server.on("upgrade", (req, socket, head) => {
   });
 });
 
-// --- In-memory state ---
 // rooms: Map<roomCode, {
-//   players: Map<WebSocket, { id, name, score, ws, addr: string|null }>,
+//   sockets: Set<WebSocket>, // host + tüm katılımcılar (subscribe eden herkes)
+//   players: Map<WebSocket, { id, name, score, ws, addr: string|null }>, // yalnızca join edenler
 //   started: boolean,
 //   questions: Array<{ id,text,options,correctIndex,points,durationSec }>,
 //   currentIndex: number,
@@ -52,7 +52,7 @@ function broadcast(roomCode, msg) {
   const r = rooms.get(roomCode);
   if (!r) return;
   const data = JSON.stringify(msg);
-  for (const [ws] of r.players) {
+  for (const ws of r.sockets) {
     try { ws.send(data); } catch {}
   }
 }
@@ -90,7 +90,6 @@ function startQuestion(roomCode) {
   }
 
   r.currentEndsAt = Date.now() + q.durationSec * 1000;
-
   console.log("[WS]", roomCode, "question →", r.currentIndex, `"${q.text.slice(0, 40)}..."`);
 
   broadcast(roomCode, {
@@ -180,6 +179,7 @@ wss.on("connection", (ws) => {
 
       if (!rooms.has(room)) {
         rooms.set(room, {
+          sockets: new Set(),
           players: new Map(),
           started: false,
           questions: [],
@@ -189,6 +189,8 @@ wss.on("connection", (ws) => {
           timer: undefined,
         });
       }
+      const r = rooms.get(room);
+      r.sockets.add(ws); // HOST + PLAYER hepsi burada
       sendState(room);
       return;
     }
@@ -226,7 +228,6 @@ wss.on("connection", (ws) => {
 
       case "join": {
         const name = String(msg.name || "Player");
-        // client hem `addr` hem `address` gönderebilir; ikisini de destekle
         const addr = msg.addr || msg.address || null;
         const id = crypto.randomUUID();
         myId = id;
@@ -279,9 +280,10 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     if (myRoom) {
       const r = rooms.get(myRoom);
-      if (r && r.players.has(ws)) {
-        r.players.delete(ws);
-        console.log("[WS]", myRoom, "disconnect → players:", r.players.size);
+      if (r) {
+        r.sockets.delete(ws);
+        if (r.players.has(ws)) r.players.delete(ws);
+        console.log("[WS]", myRoom, "disconnect → sockets:", r.sockets.size, "players:", r.players.size);
         sendState(myRoom);
       }
     }
