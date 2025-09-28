@@ -31,7 +31,6 @@ export default function Play() {
 
   const wsRef = useRef<WebSocket | null>(null);
 
-  // room code yoksa kısa dönüş
   if (!ROOM) {
     return (
       <div className="min-h-screen bg-gradient-background p-6">
@@ -48,38 +47,20 @@ export default function Play() {
     );
   }
 
-  // WS hazır değilse "open" olduğunda bir kere gönder
-  function safeSend(obj: any) {
-    const ws = wsRef.current;
-    if (!ws) return;
-    const data = JSON.stringify(obj);
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(data);
-    } else {
-      const onOpen = () => {
-        try { ws.send(data); } finally { ws.removeEventListener("open", onOpen); }
-      };
-      ws.addEventListener("open", onOpen);
-    }
-  }
-
+  // ✅ WS sadece ROOM değişince açılır, yazdığın her harfte yeniden bağlanmaz
   useEffect(() => {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
-    console.log("[PLAY] WS connect →", WS_URL, "room:", ROOM);
 
     ws.addEventListener("open", () => {
-      console.log("[PLAY] WS open → subscribe", ROOM);
       ws.send(JSON.stringify({ type: "subscribe", room: ROOM }));
-      if (initialName && account?.address) {
-        ws.send(JSON.stringify({ type: "join", room: ROOM, name: initialName, addr: account.address }));
-      }
     });
 
     ws.addEventListener("message", (ev: MessageEvent) => {
       try {
         const msg = JSON.parse(ev.data as string);
         if (!msg || msg.room !== ROOM) return;
+
         if (msg.type === "state") { setStarted(!!msg.started); return; }
         if (msg.type === "question") {
           setResults(null); setPicked(null);
@@ -94,42 +75,42 @@ export default function Play() {
           setResults({ index: -1, correctIndex: -1, leaderboard: msg.leaderboard || [] });
           setCurrentQ(null); setStarted(false); return;
         }
-      } catch (e) {
-        console.warn("[PLAY] WS parse error:", e);
-      }
+      } catch {}
     });
 
-    ws.addEventListener("error", (e) => {
-      console.error("[PLAY] WS error", e);
-    });
-
-    ws.addEventListener("close", (e) => {
-      console.warn("[PLAY] WS close", e.code, e.reason);
+    ws.addEventListener("error", () => {
+      // sessiz geç
     });
 
     return () => { try { ws.close(); } catch {} };
-    // initialName ve account değiştiğinde open'da auto-join tekrar denensin
-  }, [ROOM, initialName, account?.address]);
+  }, [ROOM]); // <-- sadece ROOM
 
-  // URL'de ?name= senkronu
+  // ?name= senkronu (bu effect WS’i tetiklemez artık)
   useEffect(() => {
     if (name && sp.get("name") !== name) {
-      const next = new URLSearchParams(sp); next.set("name", name); setSp(next, { replace: true });
+      const next = new URLSearchParams(sp);
+      next.set("name", name);
+      setSp(next, { replace: true });
     }
   }, [name, sp, setSp]);
 
   function doJoin() {
     const trimmed = name.trim();
-    if (!trimmed || !account?.address) return;
-    setName(trimmed); setJoined(true);
-    // hazır değilse open’da otomatik göndersin:
-    safeSend({ type: "join", room: ROOM, name: trimmed, addr: account.address });
+    if (!trimmed || !account?.address) return; // cüzdan şart istersen böyle kalsın
+    setName(trimmed);
+    setJoined(true);
+    wsRef.current?.send(JSON.stringify({
+      type: "join",
+      room: ROOM,
+      name: trimmed,
+      addr: account.address,  // server 'addr' ya da 'address' kabul ediyor
+    }));
   }
 
   function pick(i: number) {
     if (!currentQ || picked !== null) return;
     setPicked(i);
-    safeSend({ type: "answer", room: ROOM, index: currentQ.index, choice: i });
+    wsRef.current?.send(JSON.stringify({ type: "answer", room: ROOM, index: currentQ.index, choice: i }));
   }
 
   const [now, setNow] = useState(Date.now());
@@ -143,7 +124,6 @@ export default function Play() {
         <Card className="bg-gradient-card border-border/50">
           <CardHeader><CardTitle className="text-center">Join — Room {ROOM}</CardTitle></CardHeader>
           <CardContent className="space-y-4">
-            {/* Wallet gate */}
             {!account && (
               <div className="text-center space-y-2">
                 <p className="text-sm text-muted-foreground">Connect your wallet to join.</p>
@@ -155,12 +135,7 @@ export default function Play() {
               <>
                 <label className="text-sm font-medium text-foreground block">Your Name</label>
                 <div className="flex gap-2">
-                  <Input
-                    placeholder="e.g. Alice"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="bg-background/50 border-border"
-                  />
+                  <Input value={name} onChange={(e) => setName(e.target.value)} className="bg-background/50 border-border" />
                   <Button disabled={!name.trim()} onClick={doJoin}>Join</Button>
                 </div>
               </>
